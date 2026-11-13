@@ -1,5 +1,5 @@
 // sw.js — офлайн-кэш «Шпиона» (координатор). Версию подставляет build.mjs.
-const V = 'spy-v1pwa1';
+const V = 'spy-a68012b3f1';
 const CORE = ['./', './index.html', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './icons/maskable-512.png', './icons/apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
