@@ -16,6 +16,8 @@
 <meta property="og:description" content="Игра на словах для компании: найди шпиона, пока он не угадал слово.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230B3335'/%3E%3Cpath d='M14 34h36l-4-6H18z' fill='%23FFC629' stroke='%2306191A' stroke-width='3' stroke-linejoin='round'/%3E%3Cpath d='M20 28l3-12h18l3 12z' fill='%23FFC629' stroke='%2306191A' stroke-width='3' stroke-linejoin='round'/%3E%3Crect x='17' y='38' width='12' height='8' rx='3' fill='%2306191A'/%3E%3Crect x='35' y='38' width='12' height='8' rx='3' fill='%2306191A'/%3E%3Cpath d='M29 41h6' stroke='%2306191A' stroke-width='3'/%3E%3C/svg%3E">
 <!--FONTS-->
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600;700&family=Onest:wght@400;500;600;700;800&family=Unbounded:wght@600;700;800;900&display=swap">
@@ -10320,5 +10322,6 @@ const Spy = globalThis.Spy;
 
 })();
 </script>
+<script>if("serviceWorker" in navigator&&/^https?:$/.test(location.protocol))addEventListener("load",()=>navigator.serviceWorker.register("sw.js").catch(()=>{}));</script>
 </body>
 </html>
