@@ -6520,7 +6520,7 @@ class Grass {
       mesh.instanceMatrix.needsUpdate = true; if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
       mesh.receiveShadow = true; mesh.frustumCulled = false; mesh.userData.n = list.length; group.add(mesh); this.meshes.push(mesh);
     };
-    mk(tuftGeo(q === 'high' ? 7 : q === 'mid' ? 6 : 5, G.base, G.tip, 7), L, false);
+    mk(tuftGeo(q === 'high' ? 7 : 5, G.base, G.tip, 7), L, false);
     if (F.length) mk(flowerGeo(), F, true);
     this.count = L.length + F.length;
   }
@@ -7796,6 +7796,32 @@ float hsh(vec2 p){ p = fract(p*vec2(123.34, 456.21)); p += dot(p, p+45.32); retu
 float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f*f*(3.0-2.0*f);
   return mix(mix(hsh(i), hsh(i+vec2(1.0,0.0)), u.x), mix(hsh(i+vec2(0.0,1.0)), hsh(i+vec2(1.0,1.0)), u.x), u.y); }
 `;
+// то же для земли, но из текстуры: ~14 шумов на пиксель были главной ценой кадра (заливка всего экрана)
+const GLSL_NOISE_T = `
+uniform sampler2D uNz;
+float hsh(vec2 p){ p = fract(p*vec2(123.34, 456.21)); p += dot(p, p+45.32); return fract(p.x*p.y); }
+float vnoise(vec2 p){ return texture2D(uNz, p * 0.015625).r; }
+`;
+// плавный value-noise 512² с периодом 64 клетки (8 текселей на клетку, сглаживание запечено), мипмапы
+let _nzTex = null;
+function noiseTex() {
+  if (_nzTex) return _nzTex;
+  const N = 512, P = 64, K = N / P, g = new Float32Array(P * P), d = new Uint8Array(N * N * 4);
+  let s = 20240611; for (let i = 0; i < g.length; i++) { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; g[i] = (s >>> 8) / 16777216; }
+  const G = (x, y) => g[((y + P) % P) * P + (x + P) % P];
+  for (let y = 0; y < N; y++) {
+    const fy = (y + 0.5) / K, iy = Math.floor(fy), ty = fy - iy, uy = ty * ty * (3 - 2 * ty);
+    for (let x = 0; x < N; x++) {
+      const fx = (x + 0.5) / K, ix = Math.floor(fx), tx = fx - ix, ux = tx * tx * (3 - 2 * tx);
+      const a = G(ix, iy) + (G(ix + 1, iy) - G(ix, iy)) * ux, b = G(ix, iy + 1) + (G(ix + 1, iy + 1) - G(ix, iy + 1)) * ux;
+      const v = Math.round((a + (b - a) * uy) * 255), o = (y * N + x) * 4;
+      d[o] = d[o + 1] = d[o + 2] = v; d[o + 3] = 255;
+    }
+  }
+  const t = new T.DataTexture(d, N, N, T.RGBAFormat, T.UnsignedByteType);
+  t.wrapS = t.wrapT = T.RepeatWrapping; t.magFilter = T.LinearFilter; t.minFilter = T.LinearMipmapLinearFilter; t.generateMipmaps = true; t.needsUpdate = true;
+  return (_nzTex = t);
+}
 // спрайты-частицы: инстансы (позиция, размер, поворот, цвет rgba), всегда лицом к камере
 const SPRITE_VS = `
 attribute vec4 iPos; // xyz, size
@@ -8370,7 +8396,7 @@ function groundMaterial(U_, tex, nrm) {
     Object.assign(sh.uniforms, U_);
     sh.vertexShader = 'varying vec3 vWP; attribute float aTex; varying float vTexW;\n' + sh.vertexShader.replace('#include <project_vertex>', '#include <project_vertex>\n vWP = (modelMatrix * vec4(transformed, 1.0)).xyz; vTexW = aTex;');
     sh.fragmentShader = 'varying vec3 vWP; varying float vTexW;\nuniform sampler2D uZone; uniform sampler2D uZoneT; uniform vec2 uMap; uniform float uTime; uniform float uBuild; uniform vec3 uZoneCol; uniform float uEdgeK; uniform float uRimK; uniform float uGlow; uniform sampler2D uOcc; uniform vec3 uRockC; uniform vec3 uDry; uniform float uBio; uniform vec3 uPathC; uniform vec3 uSnow;\n' +
-      (tex ? 'uniform sampler2D uTexA; uniform sampler2D uTexB; uniform sampler2D uTileM; uniform float uTexS; uniform vec3 uG2; uniform float uEm; uniform float uTexK; uniform vec3 uAsh;\n' + GLSL_NOISE : '') +
+      (tex ? 'uniform sampler2D uTexA; uniform sampler2D uTexB; uniform sampler2D uTileM; uniform float uTexS; uniform vec3 uG2; uniform float uEm; uniform float uTexK; uniform vec3 uAsh;\n' + GLSL_NOISE_T : '') +
       (nrm ? 'uniform sampler2D uNrmA; uniform sampler2D uNrmB; uniform float uNrmK;\n' : '') +
       sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
       vec3 rzTex = vec3(0.0); vec2 rzUV = vec2(0.0); float rzWs = 0.0, rzAsh = 0.0, rzPud = 0.0, rzSnow = 0.0, rzWet = 0.0, rzTr = 0.0;
@@ -8398,8 +8424,8 @@ function groundMaterial(U_, tex, nrm) {
           vec2 q = vWP.xz;
           if (uBio > 3.5) {
             // лёд: намёты полосами по ветру, замёрзшие лужи, иней у трещин
-            float drift = smoothstep(0.5, 0.68, vnoise(vec2(q.x * 0.2 + q.y * 0.55, q.y * 1.3 - q.x * 0.3)) * 0.7 + vnoise(q * 0.45 + 3.0) * 0.3);
-            tc = mix(tc, uSnow * (0.82 + 0.28 * vnoise(q * 3.3)), drift * 0.8); rzSnow = drift;
+            float drift = smoothstep(0.46, 0.82, vnoise(vec2(q.x * 0.21 + q.y * 0.28, q.y * 0.62 - q.x * 0.14)) * 0.6 + vnoise(q * 0.5 + 3.0) * 0.4);
+            tc = mix(tc, uSnow * (0.86 + 0.2 * vnoise(q * 3.3)), drift * 0.42); rzSnow = drift * 0.6;
             float pud = smoothstep(0.71, 0.75, vnoise(q * 0.2 + 31.0) + (vnoise(q * 1.7) - 0.5) * 0.08) * (1.0 - drift);
             tc = mix(tc, vec3(0.13, 0.2, 0.3), pud * 0.85); rzPud = pud;
             #ifdef RZ_NRM
@@ -8407,15 +8433,16 @@ function groundMaterial(U_, tex, nrm) {
             #endif
           } else if (uBio > 0.5 && uBio < 1.5) {
             // лес: пятна мха и сырой земли, корни у деревьев, пятна солнца сквозь кроны (медленно плывут)
-            float moss = smoothstep(0.56, 0.7, vnoise(q * 0.31 + 5.0));
+            // мох — оттенок поверх текстуры (зеленее, не светлее), рваный край
+            float moss = smoothstep(0.55, 0.74, vnoise(q * 0.31 + 5.0) + (vnoise(q * 1.9 + 2.0) - 0.5) * 0.3);
             float wet = smoothstep(0.6, 0.72, vnoise(q * 0.26 + 17.0)) * (1.0 - moss);
-            tc = mix(tc, vec3(0.15, 0.25, 0.08) * (0.8 + 0.45 * vnoise(q * 4.0)), moss * 0.7);
+            tc = mix(tc, tc * vec3(0.8, 1.12, 0.62) * (0.8 + 0.35 * vnoise(q * 4.0)), moss * 0.75);
             tc = mix(tc, tc * vec3(0.48, 0.44, 0.4), wet * 0.8); rzWet = wet;
             float nearT = smoothstep(0.06, 0.3, tm.b) * (1.0 - smoothstep(0.8, 0.98, tm.b));
             float root = (1.0 - smoothstep(0.0, 0.045, abs(vnoise(q * 2.4 + 9.0) - 0.5))) * nearT;
             tc = mix(tc, vec3(0.17, 0.11, 0.06), root * 0.75);
-            float sun = smoothstep(0.62, 0.8, vnoise(q * 0.15 + vec2(uTime * 0.025, uTime * 0.014))) * (1.0 - tm.b * 0.8);
-            tc *= 1.0 + sun * vec3(0.5, 0.45, 0.25);
+            float sun = smoothstep(0.6, 0.86, vnoise(q * 0.34 + vec2(uTime * 0.03, uTime * 0.017))) * (1.0 - tm.b * 0.8);
+            tc *= 1.0 + sun * vec3(0.15, 0.13, 0.05);
           }
           // вытоптанная тропа врагов (маска uOcc.a по путям от порталов/гнёзд к Ядру)
           float tr = smoothstep(0.3, 0.75, texture2D(uOcc, vWP.xz / uMap).a * inMap + nz * 0.45 + (vnoise(q * 3.1) - 0.5) * 0.3);
@@ -8648,7 +8675,7 @@ function buildTerrain(world, st, pal, quality) {
   const cG = new T.Color(pal.ground).multiplyScalar(1.4), cG2 = new T.Color(pal.ground2).multiplyScalar(1.4), cR = new T.Color(pal.rock).multiplyScalar(1.1), cL = new T.Color(pal.liquid), cC = new T.Color(pal.crystal), cA = new T.Color(pal.alloy);
   const bed = cG.clone().lerp(cL, 0.25).multiplyScalar(0.55), crys = cG.clone().lerp(cC, 0.16), allo = cG.clone().lerp(cA, 0.14);
   const pos = [], col = [], tw = [], texOn = !!(WD && pre);
-  const tintC = new T.Color(1, 1, 1).lerp(cC, 0.22), tintA = new T.Color(1, 1, 1).lerp(cA, 0.22), white = new T.Color(1, 1, 1), dirt = new T.Color(0.62, 0.56, 0.5), bedT = new T.Color(0.42, 0.44, 0.46).lerp(cL, 0.18);
+  const tintC = new T.Color(1, 1, 1).lerp(cC, 0.08), tintA = new T.Color(1, 1, 1).lerp(cA, 0.08), white = new T.Color(1, 1, 1), dirt = new T.Color(0.62, 0.56, 0.5), bedT = new T.Color(0.42, 0.44, 0.46).lerp(cL, 0.18);
   const V = (x, y) => [x, vh[y * (W + 1) + x], y];
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     let t = tiles[y * W + x]; if (dset.has(y * W + x) && t === TILE.ROCK) t = TILE.GROUND;
@@ -8728,7 +8755,7 @@ function buildTerrain(world, st, pal, quality) {
   // кристаллы/сплав — светятся
   const crysGeo = new GB(0.05).add(P.oct, '#ffffff', 0, 0.5, 0, 0.5, 1, 0.5).geo();
   const crysMat = new T.MeshLambertMaterial({vertexColors: true, flatShading: true, emissive: new T.Color(pal.crystal).multiplyScalar(0.42)});
-  const allMat = new T.MeshStandardMaterial({vertexColors: true, flatShading: true, roughness: 0.35, metalness: 0.6, emissive: new T.Color(pal.alloy).multiplyScalar(0.14)});
+  const allMat = new T.MeshStandardMaterial({vertexColors: true, flatShading: true, roughness: 0.6, metalness: 0.35, emissive: new T.Color(pal.alloy).multiplyScalar(0.06)});
   const alloyGeo = new GB(0.08).add(P.dode, '#ffffff', 0, 0.3, 0, 0.7, 0.6, 0.7).geo();
   const mkDep = (list, geo, mat, c, tall) => {
     const im = new Inst(world.group, geo, mat, list.length || 1, true);
@@ -8736,7 +8763,7 @@ function buildTerrain(world, st, pal, quality) {
     im.end(); return im;
   };
   world.crystals = mkDep(crystals, crysGeo, crysMat, cC, true); world.crystalList = crystals;
-  world.alloys = mkDep(alloys, alloyGeo, allMat, cA.clone().multiplyScalar(0.62), false); world.alloyList = alloys;
+  world.alloys = mkDep(alloys, alloyGeo, allMat, cA.clone().multiplyScalar(0.42), false); world.alloyList = alloys;
   // декор: по биому (World) или старый
   if (WD && pre) { world.decor = new WD.Decor(world.group, st, pre, (QUAL[quality] || QUAL.mid).deco * 0.45 * (pre.decoK || 1), {uTime: world.uTime, uWind: world.uWind, quality, dset}); deco.length = 0; }
   const decoGeo = new GB(0.1);
@@ -8884,7 +8911,8 @@ function create(container, opts = {}) {
     const f = camera.fov * Math.PI / 360, p = cam.pitch, hh = cam.d * Math.sin(p), base = cam.d * Math.cos(p);
     const dzB = base - hh / Math.tan(p + f), dzT = p - f > 0.05 ? hh / Math.tan(p - f) - base : 99;
     const halfW = cam.d * Math.tan(f) * camera.aspect;
-    const zMin = dzT - 3, zMax = H + 1.2 - dzB, xMin = halfW - 2, xMax = W + 2 - halfW;
+    // снизу кадр закрыт панелью стройки: оставляем ~3 клетки за краем (там уже не пустота, а холмы «юбки»), чтобы нижние клетки поднимались над панелью
+    const zMin = dzT - 3, zMax = H + 3.2 - dzB, xMin = halfW - 2.5, xMax = W + 2.5 - halfW;
     cam.z = zMin > zMax ? (zMin + zMax) / 2 : U.clamp(cam.z, zMin, zMax);
     cam.x = xMin > xMax ? W / 2 : U.clamp(cam.x, xMin, xMax);
   }
@@ -8912,7 +8940,8 @@ function create(container, opts = {}) {
       placeCamera(); const a = pick(sx, sy); cam.d = U.clamp(cam.d / f, cam.dMin, cam.dMax); placeCamera();
       const b = pick(sx, sy); if (a && b) { cam.x += a.x - b.x; cam.z += a.y - b.y; } clampCam(); placeCamera();
     },
-    focus(x, y, instant, d) { if (instant) { cam.x = x; cam.z = y; if (d) cam.d = d; cam.fx = null; } else cam.fx = {x, z: y, d: d || cam.d}; cam.vx = cam.vz = 0; },
+    // instant: матрица камеры обновляется сразу — toScreen/pick верны и до следующего кадра (кадр бывает долгим)
+    focus(x, y, instant, d) { if (instant) { cam.x = x; cam.z = y; if (d) cam.d = d; cam.fx = null; clampCam(); placeCamera(); } else cam.fx = {x, z: y, d: d || cam.d}; cam.vx = cam.vz = 0; },
     get state() { return {x: cam.x, z: cam.z, d: cam.d}; },
     shake(a) { cam.shake = Math.min(1.2, cam.shake + a); },
   };
@@ -8991,7 +9020,7 @@ function create(container, opts = {}) {
     const tT0 = performance.now(), nrm = qname !== 'low', gt = pre ? WD.groundTex(pre.id, qname === 'low' ? 512 : 1024, nrm) : null, tT1 = performance.now();
     if (gt) {
       const an = Math.min(qname === 'high' ? 8 : 4, renderer.capabilities.getMaxAnisotropy()); gt.a.anisotropy = gt.b.anisotropy = an; if (gt.na) gt.na.anisotropy = gt.nb.anisotropy = an;
-      Object.assign(groundU, {uTexA: {value: gt.a}, uTexB: {value: gt.b}, uTileM: {value: null}, uTexS: {value: 0.2}, uG2: {value: new T.Vector3(pre.g2[0], pre.g2[1], pre.g2[2])}, uEm: {value: pre.em}, uTexK: {value: pre.texK}, uAsh: {value: new T.Color('#2A2624')}, uNrmA: {value: gt.na || null}, uNrmB: {value: gt.nb || null}, uNrmK: {value: pre.nrmK || 1}});
+      Object.assign(groundU, {uTexA: {value: gt.a}, uTexB: {value: gt.b}, uTileM: {value: null}, uTexS: {value: 0.2}, uG2: {value: new T.Vector3(pre.g2[0], pre.g2[1], pre.g2[2])}, uEm: {value: pre.em}, uTexK: {value: pre.texK}, uAsh: {value: new T.Color('#2A2624')}, uNz: {value: noiseTex()}, uNrmA: {value: gt.na || null}, uNrmB: {value: gt.nb || null}, uNrmK: {value: pre.nrmK || 1}});
     }
     groundU.uOcc = world.occU; groundU.uRockC = {value: new T.Color(pal.rock).multiplyScalar(1.25)}; groundU.uDry = {value: new T.Color(...((pre && pre.dry) || [1.25, 1.1, 0.62]))};
     groundU.uBio = {value: {meadow: 0, forest: 1, desert: 2, volcano: 3, ice: 4}[pre ? pre.id : 'meadow'] || 0}; groundU.uPathC = {value: new T.Color((pre && pre.pathC) || '#5A4A36')}; groundU.uSnow = {value: new T.Color('#D6E2EE')};
@@ -9602,6 +9631,8 @@ function create(container, opts = {}) {
     range1.material.uniforms.uTime.value = range2.material.uniforms.uTime.value = time;
     if (groundU) { buildK += ((buildMode ? 1 : 0) - buildK) * (1 - Math.exp(-dt * 8)); groundU.uBuild.value = buildK; }
     updateParticles(dt); statics(dt); sprites.end(); smoke.end();
+    // на mid карта теней обновляется через кадр (тени двигаются плавно, нагрузка на проход теней — вдвое меньше)
+    if (Q.shadow) { renderer.shadowMap.autoUpdate = qname !== 'mid'; if (qname === 'mid' && (frameNo & 1) === 0) renderer.shadowMap.needsUpdate = true; }
     renderer.render(scene, camera);
     // FPS и динамическое разрешение
     fpsAcc += dt; fpsN++;
@@ -11239,7 +11270,7 @@ function start(app) {
     const g = gest; gest = null;
     if (cancel) { if (g.type === 'pan') render.cam.dragEnd(); line = null; return; }
     if (g.type === 'pan') render.cam.dragEnd();
-    else if (g.type === 'line') { if (line && line.tiles.length) buildLine(); }
+    else if (g.type === 'line') { const t = tileAt(e.clientX, e.clientY); if (t && g.lineStart) line = {tiles: lineTiles(g.lineStart, t)}; if (line && line.tiles.length) buildLine(); }
     else if (g.type === 'tap' && p) onTap(p.x, p.y);
   };
   cv.addEventListener('pointerup', e => endPtr(e, false));
