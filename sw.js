@@ -16,6 +16,8 @@ self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
+  // «Рубеж» живёт в подпапке со своим service worker — его запросы не трогаем, иначе он попадёт в кэш «Шпиона»
+  if (url.origin === location.origin && /\/rubezh(\/|$)/.test(url.pathname)) return;
   // страница игры: сначала сеть (чтобы приходили обновления), без сети — из кэша
   if (req.mode === 'navigate' || (url.origin === location.origin && /\/$|\.html$/.test(url.pathname))) {
     e.respondWith(
